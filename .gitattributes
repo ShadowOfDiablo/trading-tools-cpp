@@ -1,0 +1,11 @@
+# Pin line endings. A shell script checked out with CRLF fails on Linux with a
+# confusing "bad interpreter" error, and CMake/C++ sources should not churn
+# between platforms.
+* text=auto eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+CMakeLists.txt text eol=lf

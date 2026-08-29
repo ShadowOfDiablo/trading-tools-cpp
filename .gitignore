@@ -1,0 +1,12 @@
+# CMake build tree
+build/
+cmake-build-*/
+
+# Tool output
+*.csv
+!tests/**/*.csv
+
+# Editors
+.vscode/
+.idea/
+*.swp
