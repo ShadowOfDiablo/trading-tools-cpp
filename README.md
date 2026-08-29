@@ -3,14 +3,14 @@
 Offline quantitative tools in C++ — fast, dependency-free, and validated against
 `statsmodels` rather than against my own confidence.
 
-Two things live here:
+Two tools live here:
 
 - **`coint_scan`** — scans a directory of OHLCV bar CSVs for cointegrated pairs
   (Engle–Granger, with the ADF lag length chosen by AIC). Built for
   whole-universe scans, where the pair count is O(n²).
-- **A backtester** *(in progress)* — replays a recorded signal stream against a
-  portfolio simulation: position sizing, regime-based take-profit/stop-loss, a
-  trailing stop, correlation-group caps, a total capital-at-risk cap and a daily
+- **`backtest`** — replays a recorded signal stream against a portfolio
+  simulation: position sizing, regime-based take-profit/stop-loss, a trailing
+  stop, correlation-group caps, a total capital-at-risk cap and a daily
   drawdown kill switch.
 
 Both are **advisory and offline**. Nothing here connects to a broker, places an
@@ -62,6 +62,50 @@ correlation prefilter enabled, against roughly 2.6 hours for the equivalent
 single-threaded Python. That is the difference between a whole-universe scan
 being something you run whenever you like and something whose scope you have to
 restrict to make it tractable.
+
+## `backtest`
+
+```bash
+./build/backtest --dir backtest_data --cash 10000
+./build/backtest --dir backtest_data --cost 0.0005   # 5bps per side
+./build/backtest --dir backtest_data --trailing 1    # override the recorded setting
+./build/backtest --help
+```
+
+Reads `signals.csv` (one row per symbol per bar, already scored) and
+`backtest_config.json` (the risk caps that run was recorded under) from `--dir`,
+and writes a trade log and an equity curve.
+
+**The split is the point: whatever owns the model produces the signals; this
+only simulates the portfolio.** It never decides whether a symbol looks
+attractive, so it cannot disagree with production about what the model said.
+Reimplementing model inference in C++ was considered and rejected — it is a
+large surface for silent divergence, and a backtest that quietly scores
+differently from production is worse than no backtest at all.
+
+The exporter that produces the signal stream lives with the model, not here.
+Its contract is the CSV columns: `timestamp, symbol, t212, group, price,
+confidence, threshold, qualifies, signal, tp_pct, sl_pct, sl_distance, risk,
+risk_scale` (plus an optional `trend_sl_pct`). Columns are located by name, so
+a reordered export cannot silently swap two of them.
+
+### It reports why signals did not become trades
+
+A backtest that says "197 trades" without saying that 13,475 signals were
+refused, and by which rule, is not telling you what you need to know. Every run
+breaks the blocked signals down by cause — already held, model not qualifying,
+correlation-group cap, portfolio risk cap, insufficient size or cash, kill
+switch. On a real six-symbol run this immediately showed that only two of the
+six had statistically qualifying models, which is a fact about the models rather
+than about the strategy, and is invisible in a headline return.
+
+### Costs are charged on both sides, and matter more than they look
+
+`--cost` is a fraction of notional charged on entry and exit, defaulting to zero
+so a run reports gross behaviour unless costs are asked for. On the same real
+six-symbol run, +0.70% gross became **-4.07%** at 5bps per side across 197
+trades. A high-turnover strategy's entire edge can live inside its transaction
+costs, so a gross-only backtest is worth very little on its own.
 
 ## Correctness
 
@@ -116,7 +160,9 @@ is why they are called out:
 ```
 src/bars.{hpp,cpp}    CSV loading, timestamp parsing, timestamp alignment
 src/stats.{hpp,cpp}   OLS, correlation, ADF, Engle-Granger cointegration
+src/portfolio.{hpp,cpp}  the portfolio rules: sizing, stops, caps, kill switch
 src/coint_scan.cpp    the pair scanner
+src/backtest.cpp      the backtest driver (CSV/JSON in, reports out)
 tests/harness.hpp     ~70 lines of test harness, in place of a framework
 tools/gen_*.py        the two generators (need numpy + statsmodels)
 ```
