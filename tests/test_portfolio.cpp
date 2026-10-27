@@ -133,9 +133,9 @@ TEST(trailing_lets_a_winner_run_past_the_fixed_target) {
 
 TEST(trailing_stop_fires_on_a_pullback_from_the_peak) {
     // 108 is below the trail (110 * 0.99 = 108.9), so the position exits. It
-    // was labelled TRAILING_STOP until 2026-10-27; the live rule labels an exit
-    // by what it REALISES, and 108 is still above the 101.8 target, so live
-    // calls this a TAKE_PROFIT. The live function is the oracle.
+    // was labelled TRAILING_STOP until 2026-10-27; an exit is labelled by what
+    // it REALISES, and 108 is still above the 101.8 target, so the reference
+    // calls this a TAKE_PROFIT.
     CHECK_EQ(check_position_safety(pos_at(100, 108.0, 110), 0.018, 0.010, true, {}, {}).value_or("NONE"),
              std::string("TAKE_PROFIT"));
 }
@@ -168,15 +168,14 @@ TEST(the_profit_lock_banks_a_gain_that_never_reaches_the_target) {
     CHECK_EQ(check_position_safety(pos_at(100, 100.3, 100.6), 0.018, 0.010, true, {}, {},
                                     0.005, 0.0025).value_or("NONE"),
              std::string("TRAILING_STOP"));
-    // Same position with the lock off (the live default) holds.
+    // Same position with the lock off (the default) holds.
     CHECK(!check_position_safety(pos_at(100, 100.3, 100.6), 0.018, 0.010, true, {}, {}).has_value());
 }
 
-TEST(every_exit_case_matches_the_live_bot) {
-    // 8,800 cases generated from risk_manager.check_position_safety itself
-    // (research/gen_exit_fixtures.py in the trading bot). Before this port the
-    // C++ disagreed with live on 1,683 of them, including 82 where it closed a
-    // position the live bot keeps.
+TEST(every_exit_case_matches_the_reference) {
+    // 8,800 cases with the reference implementation's own answers. Before
+    // this port the C++ disagreed on 1,683 of them, including 82 where it
+    // closed a position the reference keeps open.
     int mismatches = 0;
     std::string first;
     for (const auto& c : exit_fixtures::cases) {
@@ -189,12 +188,12 @@ TEST(every_exit_case_matches_the_live_bot) {
             if (mismatches++ < 5) {
                 first += std::string("\n  ") + c.policy + " natr=" + std::to_string(c.natr) +
                          " peak=" + std::to_string(c.peak) + " price=" + std::to_string(c.price) +
-                         " live=" + want + " cpp=" + have;
+                         " ref=" + want + " cpp=" + have;
             }
         }
     }
     CHECK_EQ(exit_fixtures::case_count, 8800);
-    if (mismatches) tbtest::fail(TB_WHERE, std::to_string(mismatches) + " cases disagree with live:" + first);
+    if (mismatches) tbtest::fail(TB_WHERE, std::to_string(mismatches) + " cases disagree with the reference:" + first);
 }
 
 TEST(fixed_stop_still_floors_a_loose_trailing_distance) {

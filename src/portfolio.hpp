@@ -54,7 +54,7 @@ struct BacktestConfig {
     // live configuration does when these are unset.
     std::optional<double> trailing_activation_pct;
     std::optional<double> trailing_distance_pct;
-    // The live PROFIT_LOCK_AT / PROFIT_LOCK_GIVE_BACK. Zero means off.
+    // The partial profit lock (see check_position_safety). Zero means off.
     double profit_lock_at = 0.0;
     double profit_lock_give_back = 0.0;
     bool allow_low_edge_trading = false;
@@ -143,9 +143,8 @@ double position_size(double cash, double price, double risk_fraction,
                      bool heat_scaling, double heat_min_scale);
 
 // Returns the exit reason ("STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP") or
-// nullopt to hold. A reimplementation of the live bot's
-// risk_manager.check_position_safety, which is its ORACLE: every branch is
-// pinned by tests/exit_fixtures.hpp, generated from the live code.
+// nullopt to hold. Every branch is pinned by tests/exit_fixtures.hpp, which
+// is generated from an external reference implementation of the same rules.
 //
 // With trailing enabled and the position far enough into profit, the position
 // rides until it gives back trailing_distance_pct off its own PEAK, but never
@@ -153,7 +152,7 @@ double position_size(double cash, double price, double risk_fraction,
 // fixed stop-loss, measured off entry, is checked first and still floors it.
 //
 // profit_lock_at / profit_lock_give_back arm an earlier, tighter trail for
-// gains that never reach the target. Zero means off, as in the live config.
+// gains that never reach the target. Zero means off.
 std::optional<std::string> check_position_safety(
     const Position& pos, double tp_pct, double sl_pct, bool trailing_enabled,
     std::optional<double> trailing_activation_pct, std::optional<double> trailing_distance_pct,

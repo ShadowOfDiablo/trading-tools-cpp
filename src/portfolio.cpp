@@ -66,26 +66,24 @@ double position_size(double cash, double price, double risk_fraction,
     return std::floor(final_shares * 10000.0) / 10000.0;
 }
 
-// THE ORACLE FOR THIS FUNCTION IS risk_manager.check_position_safety IN THE
-// PYTHON TRADING BOT, NOT THIS FILE.
+// THE ORACLE FOR THIS FUNCTION IS AN EXTERNAL REFERENCE IMPLEMENTATION, NOT
+// THIS FILE.
 //
 // It is the same relationship coint has with statsmodels one directory over,
-// and for the same stated reason: being quietly a little wrong here does not
-// crash, it just reports a trailing-stop finding that is not there. One
-// actually did. An engine built WITHOUT the activation gate below produced
-// "widen the trailing distance, +2.16bp/day at z=+4.22", and it survived five
-// out-of-sample folds, both halves of the window, a cost sweep and a capital
-// normalisation -- because all of those shared the one wrong engine. With the
-// gate restored the knob is worth -0.02bp/day.
+// and for the same reason: being quietly a little wrong here does not crash,
+// it just reports a trailing-stop finding that is not there. An engine
+// missing the activation gate below can produce a confident, robust-looking
+// "widen the trailing distance" result that vanishes once the gate is back,
+// because every cut of the analysis shares the one wrong engine.
 //
-// tests/exit_fixtures.hpp is generated from the live Python and pins every
+// tests/exit_fixtures.hpp is generated from the reference and pins every
 // branch below, so a divergence fails the BUILD instead of being quoted. Do
 // not hand-tune anything here to make a fixture pass: regenerate the header
-// against the live code, and if the header then changes, understand why
+// against the reference, and if the header then changes, understand why
 // before committing it.
 //
-// Three things here were WRONG relative to live until 2026-10-09, which is
-// the reason the fixtures exist at all:
+// Three things here were WRONG relative to the reference until 2026-10, which
+// is the reason the fixtures exist at all:
 //   * no ratchet -- arming trailing DISCARDED the take-profit, so a target
 //     that was reached was never banked;
 //   * no partial profit lock, so a gain that never reached the ATR-scaled
@@ -108,17 +106,16 @@ std::optional<std::string> check_position_safety(
 
         // A SECOND, EARLIER arming point with its own, TIGHTER give-back, for
         // the gains that never reach the target. tp_pct is ATR-scaled, so a
-        // volatile name needs a large move to bank anything: in replay only
-        // ~3% of exits are TAKE_PROFIT against ~75% closing at the
-        // session-end flatten.
+        // volatile name needs a large move to bank anything, and most
+        // positions close some other way before they get there.
         //
         // It NEEDS its own give-back, which is why merely lowering the
         // activation does not work: the give-back stays sl_pct, so arming
         // early puts the level BELOW the entry stop where it can never bind.
         // Locking requires give_back < arm_at.
         //
-        // Zero means off, matching the live convention exactly -- the Python
-        // treats a falsy value as absent, so 0.0 must not arm anything here.
+        // Zero means off, matching the reference exactly: it treats a zero
+        // value as absent, so 0.0 must not arm anything here.
         const bool lock_armed = profit_lock_at > 0.0 && profit_lock_give_back > 0.0 &&
                                 peak_gain >= profit_lock_at;
 
