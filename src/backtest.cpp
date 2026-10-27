@@ -34,6 +34,7 @@ struct Options {
     double cash = 10000.0;
     double cost_per_side = 0.0;
     std::optional<bool> trailing;   // overrides the recorded config when set
+    long long min_hold = 0;         // seconds; 0 = signal exits are never delayed
     bool help = false;
 };
 
@@ -70,6 +71,7 @@ bool parse_args(int argc, char** argv, Options& o) {
         else if (a == "--cash") { const char* v = next("--cash"); if (!v) return false; o.cash = std::atof(v); }
         else if (a == "--cost") { const char* v = next("--cost"); if (!v) return false; o.cost_per_side = std::atof(v); }
         else if (a == "--trailing") { const char* v = next("--trailing"); if (!v) return false; o.trailing = (std::atoi(v) != 0); }
+        else if (a == "--min-hold") { const char* v = next("--min-hold"); if (!v) return false; o.min_hold = std::atoll(v); }
         else { std::fprintf(stderr, "unknown argument: %s\n", a.c_str()); return false; }
     }
     return true;
@@ -256,6 +258,10 @@ int main(int argc, char** argv) {
         config.trailing_stop_enabled = json.boolean("trailing_stop_enabled", false);
         config.trailing_activation_pct = json.number("trailing_activation_pct");
         config.trailing_distance_pct = json.number("trailing_distance_pct");
+        // Absent in a config recorded before the profit lock existed; zero
+        // (off) is then the faithful reading, not a guess.
+        config.profit_lock_at = num("profit_lock_at", 0.0);
+        config.profit_lock_give_back = num("profit_lock_give_back", 0.0);
         config.allow_low_edge_trading = json.boolean("allow_low_edge_trading", false);
     } else {
         // Loudly, because silently substituting defaults for the caps a run was
@@ -268,6 +274,7 @@ int main(int argc, char** argv) {
                      config_path.c_str());
     }
     if (opt.trailing) config.trailing_stop_enabled = *opt.trailing;
+    config.min_hold_seconds = opt.min_hold;
 
     const BacktestResult r = run(rows, config);
 

@@ -66,9 +66,36 @@ double position_size(double cash, double price, double risk_fraction,
     return std::floor(final_shares * 10000.0) / 10000.0;
 }
 
+// THE ORACLE FOR THIS FUNCTION IS risk_manager.check_position_safety IN THE
+// PYTHON TRADING BOT, NOT THIS FILE.
+//
+// It is the same relationship coint has with statsmodels one directory over,
+// and for the same stated reason: being quietly a little wrong here does not
+// crash, it just reports a trailing-stop finding that is not there. One
+// actually did. An engine built WITHOUT the activation gate below produced
+// "widen the trailing distance, +2.16bp/day at z=+4.22", and it survived five
+// out-of-sample folds, both halves of the window, a cost sweep and a capital
+// normalisation -- because all of those shared the one wrong engine. With the
+// gate restored the knob is worth -0.02bp/day.
+//
+// tests/exit_fixtures.hpp is generated from the live Python and pins every
+// branch below, so a divergence fails the BUILD instead of being quoted. Do
+// not hand-tune anything here to make a fixture pass: regenerate the header
+// against the live code, and if the header then changes, understand why
+// before committing it.
+//
+// Three things here were WRONG relative to live until 2026-10-09, which is
+// the reason the fixtures exist at all:
+//   * no ratchet -- arming trailing DISCARDED the take-profit, so a target
+//     that was reached was never banked;
+//   * no partial profit lock, so a gain that never reached the ATR-scaled
+//     target could not be banked at all;
+//   * the trailing trigger was tested BEFORE the fixed stop, so a gap through
+//     both was attributed to the trail.
 std::optional<std::string> check_position_safety(
     const Position& pos, double tp_pct, double sl_pct, bool trailing_enabled,
-    std::optional<double> trailing_activation_pct, std::optional<double> trailing_distance_pct) {
+    std::optional<double> trailing_activation_pct, std::optional<double> trailing_distance_pct,
+    double profit_lock_at, double profit_lock_give_back) {
     const double initial = pos.average_price;
     const double current = pos.current_price;
     if (initial <= 0.0) return std::nullopt;
@@ -78,13 +105,54 @@ std::optional<std::string> check_position_safety(
     if (trailing_enabled && pos.peak_price > initial) {
         const double peak_gain = (pos.peak_price / initial) - 1.0;
         const double activation = trailing_activation_pct.value_or(tp_pct);
-        if (peak_gain >= activation) {
-            const double distance = trailing_distance_pct.value_or(sl_pct);
-            if (current <= pos.peak_price * (1.0 - distance)) return "TRAILING_STOP";
-            // Trailing is armed but not hit. The fixed stop off ENTRY is still
-            // the floor; the fixed take-profit is deliberately skipped so a
-            // running trend is not capped at the first regime target.
+
+        // A SECOND, EARLIER arming point with its own, TIGHTER give-back, for
+        // the gains that never reach the target. tp_pct is ATR-scaled, so a
+        // volatile name needs a large move to bank anything: in replay only
+        // ~3% of exits are TAKE_PROFIT against ~75% closing at the
+        // session-end flatten.
+        //
+        // It NEEDS its own give-back, which is why merely lowering the
+        // activation does not work: the give-back stays sl_pct, so arming
+        // early puts the level BELOW the entry stop where it can never bind.
+        // Locking requires give_back < arm_at.
+        //
+        // Zero means off, matching the live convention exactly -- the Python
+        // treats a falsy value as absent, so 0.0 must not arm anything here.
+        const bool lock_armed = profit_lock_at > 0.0 && profit_lock_give_back > 0.0 &&
+                                peak_gain >= profit_lock_at;
+
+        if (peak_gain >= activation || lock_armed) {
+            const double distance = (peak_gain >= activation)
+                                        ? trailing_distance_pct.value_or(sl_pct)
+                                        // Locking only. Deliberately NOT sl_pct.
+                                        : profit_lock_give_back;
+            double trailing_stop_price = pos.peak_price * (1.0 - distance);
+
+            // THE RATCHET. Once the peak has TOUCHED the fixed take-profit the
+            // trailing exit must never be worse than the take-profit itself.
+            // Gated on peak_gain >= tp_pct and NOT on activation, so a custom
+            // activation below tp_pct cannot floor the exit above a price the
+            // position never traded at.
+            const double take_profit_price = initial * (1.0 + tp_pct);
+            if (peak_gain >= tp_pct && take_profit_price > trailing_stop_price) {
+                trailing_stop_price = take_profit_price;
+            }
+
+            // THE FIXED STOP IS CHECKED FIRST. The floor above raises the
+            // trigger past entry, so a gap straight through both levels would
+            // otherwise be claimed by the floor and reported as a TAKE_PROFIT
+            // on a position closing at a LOSS.
             if (trade_return <= -sl_pct) return "STOP_LOSS";
+
+            if (current <= trailing_stop_price) {
+                // Labelled by what the exit REALISES, not by which level
+                // armed it. A floored trigger with price gapping below it is
+                // not a take-profit, and attribution that said otherwise
+                // would overstate exactly the statistic the ratchet exists
+                // to move.
+                return current >= take_profit_price ? "TAKE_PROFIT" : "TRAILING_STOP";
+            }
             return std::nullopt;
         }
     }
@@ -196,7 +264,8 @@ BacktestResult run(std::span<const SignalRow> rows, const BacktestConfig& config
         if (in_position) {
             const auto reason = check_position_safety(
                 *held, row.tp_pct, row.sl_pct, config.trailing_stop_enabled,
-                config.trailing_activation_pct, config.trailing_distance_pct);
+                config.trailing_activation_pct, config.trailing_distance_pct,
+                config.profit_lock_at, config.profit_lock_give_back);
             if (reason) {
                 close_position(held, row.price, row.timestamp, *reason);
                 result.equity_curve.push_back({row.timestamp, equity_now(), cash,
@@ -273,7 +342,15 @@ BacktestResult run(std::span<const SignalRow> rows, const BacktestConfig& config
         } else if (!row.is_long && in_position && row.qualifies) {
             // A FLAT from an UNQUALIFIED engine means "no trustworthy opinion",
             // not "get out" - so it must never force a close on its own.
-            close_position(held, row.price, row.timestamp, "ML_EXIT");
+            //
+            // A qualified FLAT still cannot close a position that has not been
+            // held for min_hold_seconds: see that field's comment. The stop and
+            // target above are unaffected and already ran this bar.
+            if (row.timestamp - held->opened_at >= config.min_hold_seconds) {
+                close_position(held, row.price, row.timestamp, "ML_EXIT");
+            } else {
+                ++result.held_by_min_hold;
+            }
         }
 
         const double eq = equity_now();

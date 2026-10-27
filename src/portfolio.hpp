@@ -54,8 +54,22 @@ struct BacktestConfig {
     // live configuration does when these are unset.
     std::optional<double> trailing_activation_pct;
     std::optional<double> trailing_distance_pct;
+    // The live PROFIT_LOCK_AT / PROFIT_LOCK_GIVE_BACK. Zero means off.
+    double profit_lock_at = 0.0;
+    double profit_lock_give_back = 0.0;
     bool allow_low_edge_trading = false;
     double starting_cash = 10000.0;
+    // Minimum time a position is held before a signal-driven exit is allowed.
+    // Zero reproduces the original behaviour exactly.
+    //
+    // This exists because a model trained to predict a move N bars ahead is
+    // routinely closed out after one or two bars, the moment its confidence
+    // dips below the entry threshold - realising a fraction of the move it was
+    // fitted to find. Price-based stops are deliberately NOT delayed by this:
+    // suppressing a stop-loss to honour a holding period is how a small loss
+    // becomes a large one.
+    long long min_hold_seconds = 0;
+
     // Charged on both sides of every round trip, as a fraction of notional.
     // Zero by default so a run reports the strategy's gross behaviour unless
     // costs are asked for explicitly.
@@ -111,6 +125,8 @@ struct BacktestResult {
     std::int64_t blocked_zero_size = 0;
     std::int64_t blocked_kill_switch = 0;
     std::int64_t blocked_already_held = 0;
+    // Signal-driven exits suppressed because the minimum hold had not elapsed.
+    std::int64_t held_by_min_hold = 0;
     std::unordered_map<std::string, int> exit_reasons;
 };
 
@@ -127,15 +143,21 @@ double position_size(double cash, double price, double risk_fraction,
                      bool heat_scaling, double heat_min_scale);
 
 // Returns the exit reason ("STOP_LOSS", "TAKE_PROFIT", "TRAILING_STOP") or
-// nullopt to hold.
+// nullopt to hold. A reimplementation of the live bot's
+// risk_manager.check_position_safety, which is its ORACLE: every branch is
+// pinned by tests/exit_fixtures.hpp, generated from the live code.
 //
-// With trailing enabled and the position far enough into profit, the fixed
-// take-profit is deliberately NOT taken - the position rides until it gives
-// back trailing_distance_pct off its own PEAK. The fixed stop-loss, measured
-// off entry rather than off the peak, still applies underneath as a floor.
+// With trailing enabled and the position far enough into profit, the position
+// rides until it gives back trailing_distance_pct off its own PEAK, but never
+// exits below the take-profit once the peak has touched it (the ratchet). The
+// fixed stop-loss, measured off entry, is checked first and still floors it.
+//
+// profit_lock_at / profit_lock_give_back arm an earlier, tighter trail for
+// gains that never reach the target. Zero means off, as in the live config.
 std::optional<std::string> check_position_safety(
     const Position& pos, double tp_pct, double sl_pct, bool trailing_enabled,
-    std::optional<double> trailing_activation_pct, std::optional<double> trailing_distance_pct);
+    std::optional<double> trailing_activation_pct, std::optional<double> trailing_distance_pct,
+    double profit_lock_at = 0.0, double profit_lock_give_back = 0.0);
 
 // Total capital at risk if every open position hit its stop at once.
 //

@@ -1,6 +1,7 @@
 #include "harness.hpp"
 
 #include "portfolio.hpp"
+#include "exit_fixtures.hpp"
 
 #include <string>
 #include <vector>
@@ -131,8 +132,69 @@ TEST(trailing_lets_a_winner_run_past_the_fixed_target) {
 }
 
 TEST(trailing_stop_fires_on_a_pullback_from_the_peak) {
-    CHECK_EQ(*check_position_safety(pos_at(100, 108.0, 110), 0.018, 0.010, true, {}, {}),
+    // 108 is below the trail (110 * 0.99 = 108.9), so the position exits. It
+    // was labelled TRAILING_STOP until 2026-10-27; the live rule labels an exit
+    // by what it REALISES, and 108 is still above the 101.8 target, so live
+    // calls this a TAKE_PROFIT. The live function is the oracle.
+    CHECK_EQ(check_position_safety(pos_at(100, 108.0, 110), 0.018, 0.010, true, {}, {}).value_or("NONE"),
+             std::string("TAKE_PROFIT"));
+}
+
+TEST(a_trailing_exit_below_the_target_is_a_trailing_stop) {
+    // Armed by a custom 0.4% activation that the 1.8% target was never
+    // reached under, so there is no ratchet: 100.5 * 0.99 = 99.495 is the
+    // level, 99.4 is through it, and the realised exit is under the target.
+    CHECK_EQ(check_position_safety(pos_at(100, 99.4, 100.5), 0.018, 0.010, true, 0.004, {}).value_or("NONE"),
              std::string("TRAILING_STOP"));
+}
+
+TEST(the_ratchet_banks_a_target_that_was_touched) {
+    // Peak 102 touched the 101.8 target. Without the ratchet the trail sits at
+    // 102 * 0.99 = 100.98 and 101.5 would hold; with it the exit is floored at
+    // the target itself, so 101.5 (< 101.8) closes and is NOT a take-profit.
+    CHECK_EQ(check_position_safety(pos_at(100, 101.5, 102.0), 0.018, 0.010, true, {}, {}).value_or("NONE"),
+             std::string("TRAILING_STOP"));
+}
+
+TEST(a_gap_through_both_levels_is_a_stop_loss) {
+    // The ratchet raises the trigger above entry, so a gap straight through
+    // the entry stop must still be reported as what it is.
+    CHECK_EQ(check_position_safety(pos_at(100, 97.0, 102.0), 0.018, 0.010, true, {}, {}).value_or("NONE"),
+             std::string("STOP_LOSS"));
+}
+
+TEST(the_profit_lock_banks_a_gain_that_never_reaches_the_target) {
+    // Lock arms at +0.5% with a 0.25% give-back: peak 100.6 -> level 100.3485.
+    CHECK_EQ(check_position_safety(pos_at(100, 100.3, 100.6), 0.018, 0.010, true, {}, {},
+                                    0.005, 0.0025).value_or("NONE"),
+             std::string("TRAILING_STOP"));
+    // Same position with the lock off (the live default) holds.
+    CHECK(!check_position_safety(pos_at(100, 100.3, 100.6), 0.018, 0.010, true, {}, {}).has_value());
+}
+
+TEST(every_exit_case_matches_the_live_bot) {
+    // 8,800 cases generated from risk_manager.check_position_safety itself
+    // (research/gen_exit_fixtures.py in the trading bot). Before this port the
+    // C++ disagreed with live on 1,683 of them, including 82 where it closed a
+    // position the live bot keeps.
+    int mismatches = 0;
+    std::string first;
+    for (const auto& c : exit_fixtures::cases) {
+        const auto got = check_position_safety(
+            pos_at(c.entry, c.price, c.peak), c.tp_pct, c.sl_pct, c.trailing_enabled,
+            c.activation, c.distance, c.profit_lock_at, c.profit_lock_give_back);
+        const std::string want = c.expected ? c.expected : "NONE";
+        const std::string have = got ? *got : "NONE";
+        if (want != have) {
+            if (mismatches++ < 5) {
+                first += std::string("\n  ") + c.policy + " natr=" + std::to_string(c.natr) +
+                         " peak=" + std::to_string(c.peak) + " price=" + std::to_string(c.price) +
+                         " live=" + want + " cpp=" + have;
+            }
+        }
+    }
+    CHECK_EQ(exit_fixtures::case_count, 8800);
+    if (mismatches) tbtest::fail(TB_WHERE, std::to_string(mismatches) + " cases disagree with live:" + first);
 }
 
 TEST(fixed_stop_still_floors_a_loose_trailing_distance) {
@@ -227,6 +289,35 @@ TEST(a_qualified_flat_closes_the_position) {
     const BacktestResult r = run(rows, base_config());
     CHECK_EQ(r.trades.size(), std::size_t{1});
     CHECK_EQ(r.trades[0].exit_reason, std::string("ML_EXIT"));
+}
+
+TEST(min_hold_delays_a_signal_exit) {
+    BacktestConfig c = base_config();
+    c.min_hold_seconds = 4 * 3600;
+    std::vector<SignalRow> rows{
+        bar(0, "AAA", 100.0, true, true),
+        bar(3600, "AAA", 100.2, false, true),       // 1h held: too early
+        bar(4 * 3600, "AAA", 100.3, false, true),   // 4h held: allowed
+    };
+    const BacktestResult r = run(rows, c);
+    CHECK_EQ(r.trades.size(), std::size_t{1});
+    CHECK_EQ(r.trades[0].exit_reason, std::string("ML_EXIT"));
+    CHECK_EQ(r.trades[0].closed_at, std::int64_t{4 * 3600});
+    CHECK_EQ(r.held_by_min_hold, std::int64_t{1});
+}
+
+TEST(min_hold_never_delays_a_stop) {
+    // Suppressing a stop to honour a holding period is how a small loss
+    // becomes a large one.
+    BacktestConfig c = base_config();
+    c.min_hold_seconds = 24 * 3600;
+    std::vector<SignalRow> rows{
+        bar(0, "AAA", 100.0, true),
+        bar(60, "AAA", 98.5, true),
+    };
+    const BacktestResult r = run(rows, c);
+    CHECK_EQ(r.trades.size(), std::size_t{1});
+    CHECK_EQ(r.trades[0].exit_reason, std::string("STOP_LOSS"));
 }
 
 TEST(the_correlation_group_cap_blocks_a_third_name_in_one_group) {
