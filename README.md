@@ -1,6 +1,6 @@
 # trading-tools-cpp
 
-Offline quantitative tools in C++ — fast, dependency-free, and validated against
+Offline tools in C++ that I use to test my trading bot — fast, dependency-free, and validated against
 `statsmodels` rather than against my own confidence.
 
 Two pieces live here:
