@@ -64,37 +64,17 @@ restrict to make it tractable.
 
 ## The backtest driver
 
-A backtest should run the strategy itself through history, not a second copy
-of its rules. A backtester that re-implements a strategy holds two versions of
-every rule, and two versions drift: the replay then reports results for a
-strategy nobody runs. So the work is split three ways, and only one of the
-three lives in the driver:
+`src/driver.hpp` replays historical bars through a strategy and a simulated
+broker, and records the fills and the account after every step. The strategy
+makes every decision and the broker does all the accounting; the driver is
+only the clock, the data feed and the recorder, so a backtest runs the real
+strategy rather than a second copy of its rules.
 
-| piece | job | where |
-|---|---|---|
-| **driver** | the simulated clock, the historical data feed, the recorder | `src/driver.hpp` |
-| **broker** | fills, fees, cash, positions: a simulated account | implements `tb::driver::Broker` |
-| **strategy** | every trading decision | implements `tb::driver::Strategy` |
+Runs are idempotent: a run is identified by its inputs, writes into a directory
+named after that identity, and the same inputs give byte-identical output.
 
-For each distinct bar timestamp, in order, the driver marks the broker's prices,
-asks the strategy for orders (handing it only bars that have closed: it cannot
-see the future), submits those orders to the broker, and records the fills and
-the broker's account snapshot.
-
-### Runs are idempotent
-
-- **No wall clock and no randomness** in the loop: time is the timestamp of the
-  bars being replayed, and bars are ordered by timestamp and then symbol, never
-  by load order.
-- **A run is identified by its inputs**: a fingerprint of every bar file's
-  bytes plus the strategy's and the broker's names. Output goes to
-  `<output>/<run identifier>/`, so a different input can never overwrite
-  another input's result.
-- **The same inputs give byte-identical output** (`manifest.txt`, `fills.csv`,
-  `equity.csv`); numbers are written in shortest round-trip form.
-
-A strategy or broker whose behaviour changes must change its name, since the
-name is part of the identity.
+The design, the call order, the output files and what the tests prove are in
+[docs/driver.md](docs/driver.md).
 
 ## Correctness
 
@@ -151,6 +131,7 @@ src/bars.{hpp,cpp}    CSV loading, timestamp parsing, timestamp alignment
 src/stats.{hpp,cpp}   OLS, correlation, ADF, Engle-Granger cointegration
 src/driver.{hpp,cpp}  the backtest driver: clock, data feed, recorder
 src/coint_scan.cpp    the pair scanner
+docs/driver.md        how the backtest driver works
 tests/harness.hpp     ~70 lines of test harness, in place of a framework
 tools/gen_*.py        the two generators (need numpy + statsmodels)
 ```

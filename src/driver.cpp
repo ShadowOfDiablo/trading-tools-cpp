@@ -14,7 +14,6 @@ namespace tb::driver {
 
 namespace formatting {
 
-// FNV-1a, 64-bit (http://www.isthe.com/chongo/tech/comp/fnv/).
 constexpr std::uint64_t fnvOffsetBasis = 14695981039346656037ULL;
 constexpr std::uint64_t fnvPrime = 1099511628211ULL;
 
@@ -23,11 +22,8 @@ constexpr std::uint64_t hexDigitMask = 0xF;
 constexpr int bitsPerHexDigit = 4;
 constexpr int hexDigitsPerFingerprint = 16;
 
-// Large enough for any double or int64 that std::to_chars can produce.
 constexpr size_t numberBufferSize = 64;
 
-// The separator hashed between fields, so that ("ab", "c") and ("a", "bc")
-// never produce the same run identity.
 constexpr std::string_view fieldSeparator = "\x1f";
 
 std::string toHex(std::uint64_t value) {
@@ -39,8 +35,6 @@ std::string toHex(std::uint64_t value) {
     return text;
 }
 
-// Shortest round-trip representation: the same double always prints the same
-// characters, which is what makes the output files byte-identical across runs.
 void appendNumber(std::string& output, double value) {
     char buffer[numberBufferSize];
     const std::to_chars_result written = std::to_chars(buffer, buffer + numberBufferSize, value);
@@ -63,7 +57,6 @@ std::uint64_t fingerprintText(std::string_view text, std::uint64_t seed) {
     return fingerprintBytes(std::span<const char>(text.data(), text.size()), seed);
 }
 
-// "AAPL__1h.csv" -> "AAPL"; a name without "__" is used whole, minus extension.
 std::string symbolFromFileName(const std::filesystem::path& filePath) {
     const std::string stem = filePath.stem().string();
     const size_t separatorPosition = stem.find("__");
@@ -205,8 +198,6 @@ bool loadHistories(std::span<const std::string> filePaths, std::vector<Bars>& hi
         }
         const std::string content{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 
-        // load_csv reports a malformed file by throwing. Caught here once per
-        // FILE, at load time, never inside the replay loop or per value.
         Bars history;
         try {
             history = load_csv(filePath, formatting::symbolFromFileName(filePath));
