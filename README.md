@@ -1,17 +1,16 @@
 # trading-tools-cpp
 
-Offline quantitative tools in C++ — fast, dependency-free, and validated against
+Offline tools in C++ that I use to test my trading bot — fast, dependency-free, and validated against
 `statsmodels` rather than against my own confidence.
 
-Two things live here:
+Two pieces live here:
 
 - **`coint_scan`** — scans a directory of OHLCV bar CSVs for cointegrated pairs
   (Engle–Granger, with the ADF lag length chosen by AIC). Built for
   whole-universe scans, where the pair count is O(n²).
-- **A backtester** *(in progress)* — replays a recorded signal stream against a
-  portfolio simulation: position sizing, regime-based take-profit/stop-loss, a
-  trailing stop, correlation-group caps, a total capital-at-risk cap and a daily
-  drawdown kill switch.
+- **the backtest driver** (`src/driver.hpp`) — replays historical bars through
+  a strategy and a simulated broker, and records what they did. It makes no
+  trading decision and does no accounting of its own.
 
 Both are **advisory and offline**. Nothing here connects to a broker, places an
 order, or needs credentials or network access. They read CSVs and write reports.
@@ -62,6 +61,20 @@ correlation prefilter enabled, against roughly 2.6 hours for the equivalent
 single-threaded Python. That is the difference between a whole-universe scan
 being something you run whenever you like and something whose scope you have to
 restrict to make it tractable.
+
+## The backtest driver
+
+`src/driver.hpp` replays historical bars through a strategy and a simulated
+broker, and records the fills and the account after every step. The strategy
+makes every decision and the broker does all the accounting; the driver is
+only the clock, the data feed and the recorder, so a backtest runs the real
+strategy rather than a second copy of its rules.
+
+Runs are idempotent: a run is identified by its inputs, writes into a directory
+named after that identity, and the same inputs give byte-identical output.
+
+The design, the call order, the output files and what the tests prove are in
+[docs/driver.md](docs/driver.md).
 
 ## Correctness
 
@@ -116,7 +129,9 @@ is why they are called out:
 ```
 src/bars.{hpp,cpp}    CSV loading, timestamp parsing, timestamp alignment
 src/stats.{hpp,cpp}   OLS, correlation, ADF, Engle-Granger cointegration
+src/driver.{hpp,cpp}  the backtest driver: clock, data feed, recorder
 src/coint_scan.cpp    the pair scanner
+docs/driver.md        how the backtest driver works
 tests/harness.hpp     ~70 lines of test harness, in place of a framework
 tools/gen_*.py        the two generators (need numpy + statsmodels)
 ```

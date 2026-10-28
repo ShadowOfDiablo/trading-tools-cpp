@@ -19,6 +19,7 @@ endif()
 add_library(tb STATIC
   src/bars.cpp
   src/stats.cpp
+  src/driver.cpp
 )
 target_include_directories(tb PUBLIC src)
 
@@ -49,6 +50,7 @@ add_executable(tb_tests
   tests/test_main.cpp
   tests/test_bars.cpp
   tests/test_stats.cpp
+  tests/test_driver.cpp
 )
 target_link_libraries(tb_tests PRIVATE tb)
 add_test(NAME tb_tests COMMAND tb_tests)
