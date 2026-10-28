@@ -19,7 +19,7 @@ endif()
 add_library(tb STATIC
   src/bars.cpp
   src/stats.cpp
-  src/portfolio.cpp
+  src/driver.cpp
 )
 target_include_directories(tb PUBLIC src)
 
@@ -44,16 +44,13 @@ target_link_libraries(tb PUBLIC Threads::Threads)
 add_executable(coint_scan src/coint_scan.cpp)
 target_link_libraries(coint_scan PRIVATE tb)
 
-add_executable(backtest src/backtest.cpp)
-target_link_libraries(backtest PRIVATE tb)
-
 enable_testing()
 
 add_executable(tb_tests
   tests/test_main.cpp
   tests/test_bars.cpp
   tests/test_stats.cpp
-  tests/test_portfolio.cpp
+  tests/test_driver.cpp
 )
 target_link_libraries(tb_tests PRIVATE tb)
 add_test(NAME tb_tests COMMAND tb_tests)
